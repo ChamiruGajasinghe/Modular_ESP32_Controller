@@ -12,7 +12,8 @@ This system provides:
 - **Intelligent Emergency Light Control** (activates only when needed)
 - **Automated Emergency Sequence** during power cuts
 - **Web Dashboard** for monitoring and control from anywhere
-- **Power Cut History Tracking** with energy consumption data
+- **Power Cut History Tracking** with energy consumption data 
+
 
 ---
 
