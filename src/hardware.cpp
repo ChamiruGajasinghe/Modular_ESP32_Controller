@@ -1,0 +1,211 @@
+#include "hardware.h"
+#include "config.h"
+#include "globals.h"
+#include "network.h"
+
+void setupHardware() {
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  
+  pinMode(LED2_PIN, OUTPUT);
+  digitalWrite(LED2_PIN, HIGH); 
+  
+  pinMode(LED4_PIN, OUTPUT);
+  digitalWrite(LED4_PIN, HIGH); 
+  
+  pinMode(POWER_STATUS_PIN, OUTPUT);
+  digitalWrite(POWER_STATUS_PIN, HIGH); 
+  
+  pinMode(INTENSITY_B0_PIN, INPUT);
+  pinMode(INTENSITY_B1_PIN, INPUT);
+  pinMode(INTENSITY_B2_PIN, INPUT);
+  
+  Wire.begin();
+  
+  Serial.println("Initializing INA3221 (RobTillaart)...");
+  
+  if (!INA.begin()) {
+    Serial.println("ERROR: Could not find INA3221. Check wiring/address!");
+  } else {
+    Serial.println("✓ INA3221 Sensor Connected!");
+    INA.setShuntR(0, 0.1);
+    INA.setShuntR(1, 0.1);
+    INA.setShuntR(2, 0.1);
+  }
+}
+
+void updateSensors() {
+  static unsigned long lastSensorRead = 0;
+  static unsigned long lastIntensityRead = 0;
+  unsigned long currentMillis = millis();
+
+  // --- LIGHT INTENSITY ---
+  if (currentMillis - lastIntensityRead >= 2000) {
+    lastIntensityRead = currentMillis;
+    int b0 = digitalRead(INTENSITY_B0_PIN);
+    int b1 = digitalRead(INTENSITY_B1_PIN);
+    int b2 = digitalRead(INTENSITY_B2_PIN);
+    int val = (b2 << 2) | (b1 << 1) | b0;
+    currentLightIntensity = (val / 7.0) * 100.0;
+
+    char intensityStr[10];
+    dtostrf(currentLightIntensity, 5, 1, intensityStr);
+    mqtt_client.publish(mqtt_light_intensity_topic, intensityStr);
+    Serial.printf("Light Intensity: %.1f%%\n", currentLightIntensity);
+  }
+
+  // --- INA3221 READINGS ---
+  if (currentMillis - lastSensorRead >= 2000) {
+    lastSensorRead = currentMillis;
+    
+    Serial.println("\n--- Channel Measurements ---");
+    
+    // Channel 1
+    float v1 = INA.getBusVoltage(0);
+    float c1 = INA.getCurrent(0) * 1000.0; 
+    char v1s[10], c1s[10];
+    dtostrf(v1, 5, 3, v1s); dtostrf(c1, 6, 2, c1s);
+    mqtt_client.publish(mqtt_sensor_voltage_topic, v1s);
+    mqtt_client.publish(mqtt_sensor_current_topic, c1s);
+    Serial.printf("CH1: %.3f V | %.2f mA\n", v1, c1);
+
+    // Channel 2
+    float v2 = INA.getBusVoltage(1);
+    float c2 = INA.getCurrent(1) * 1000.0; 
+    char v2s[10], c2s[10];
+    dtostrf(v2, 5, 3, v2s); dtostrf(c2, 6, 2, c2s);
+    mqtt_client.publish(mqtt_sensor2_voltage_topic, v2s);
+    mqtt_client.publish(mqtt_sensor2_current_topic, c2s);
+    Serial.printf("CH2: %.3f V | %.2f mA\n", v2, c2);
+    
+    // --- ENERGY CALCULATION ---
+    if (powerCutDetected) {
+      float timeDelta = (currentMillis - lastEnergyCalcTime) / 1000.0;
+      float power = v1 * (c1 / 1000.0); 
+      totalEnergyConsumed += (power * (timeDelta / 3600.0) * 1000.0);
+      lastEnergyCalcTime = currentMillis;
+    }
+
+    // --- POWER CUT DETECTION LOGIC ---
+    if (v2 < POWER_CUT_THRESHOLD) {
+      if (!powerCutDetected) {
+        powerCutDetected = true;
+        emergencyModeActive = true;
+        emergencyStartTime = currentMillis;
+        gpio14Activated = false;
+        
+        powerCutStartTime = currentMillis;
+        lastEnergyCalcTime = currentMillis;
+        startVoltage = v1;
+        totalEnergyConsumed = 0;
+        
+        mqtt_client.publish(mqtt_powercut_topic, "POWER_CUT");
+        publishCommandStatus("⚠️ POWER CUT DETECTED! Starting emergency sequence...");
+        
+        // --- 1. IMMEDIATE SYSTEM ACTIONS ---
+        digitalWrite(LED2_PIN, LOW); // Turn System ON
+        mqtt_client.publish(mqtt_led2_status_topic, "ON");
+        publishCommandStatus("✓ Step 1: GPIO13 (System) turned ON");
+
+        // --- 2. IMMEDIATE EMERGENCY LIGHT CHECK ---
+        // Requirement: "Immediate turn on when power loss detected"
+        if (currentLightIntensity < 40.0 && !manualEmergencyControl) {
+            digitalWrite(POWER_STATUS_PIN, LOW); // ON
+            mqtt_client.publish(mqtt_emergency_light_status_topic, "ON");
+            publishCommandStatus("💡 Power Cut! Light Intensity Low - Emergency Light ON");
+        }
+        
+        gpio14ActivationTime = currentMillis + GPIO14_DELAY;
+        Serial.println("⚠️ POWER CUT DETECTED! Emergency mode activated.");
+      }
+    } else {
+      // Power Restored
+      if (powerCutDetected) {
+        powerCutDetected = false;
+        endVoltage = v1;
+        float drop = startVoltage - endVoltage;
+        unsigned long dur = currentMillis - powerCutStartTime;
+        
+        char history[200];
+        snprintf(history, sizeof(history), 
+          "{\"duration\":%lu,\"startV\":%.2f,\"endV\":%.2f,\"drop\":%.2f,\"energy\":%.2f}",
+          dur, startVoltage, endVoltage, drop, totalEnergyConsumed);
+        mqtt_client.publish(mqtt_powercut_history_topic, history);
+        
+        if (!manualEmergencyControl) {
+          digitalWrite(POWER_STATUS_PIN, HIGH);
+          mqtt_client.publish(mqtt_emergency_light_status_topic, "OFF");
+        }
+        mqtt_client.publish(mqtt_powercut_topic, "NORMAL");
+        mqtt_client.publish(mqtt_command_status_topic, "CLEAR_LOG");
+        delay(50);
+        publishCommandStatus("✓ Power Restored.");
+        
+        // Interrupt Emergency Mode if active
+        if (emergencyModeActive) {
+           digitalWrite(LED2_PIN, HIGH);
+           digitalWrite(LED4_PIN, HIGH);
+           mqtt_client.publish(mqtt_led2_status_topic, "OFF");
+           mqtt_client.publish(mqtt_led4_status_topic, "OFF");
+           emergencyModeActive = false;
+           Serial.println("Emergency mode interrupted.");
+        }
+      }
+    }
+  }
+}
+
+void handleEmergencyLogic() {
+  unsigned long currentMillis = millis();
+
+  // --- NEW: PERIODIC LIGHT CHECK (Every 20 Seconds) ---
+  // Requirement: "Check for every 20 sec... until power returns"
+  if (powerCutDetected) {
+      static unsigned long lastLightCheck = 0;
+      
+      // The timer logic
+      if (currentMillis - lastLightCheck >= 20000) {
+          lastLightCheck = currentMillis;
+          
+          if (currentLightIntensity < 40.0 && !manualEmergencyControl) {
+             // Ensure it is ON
+             digitalWrite(POWER_STATUS_PIN, LOW); 
+             mqtt_client.publish(mqtt_emergency_light_status_topic, "ON");
+             publishCommandStatus("💡 20s Check: Light < 40% - Keeping Light ON");
+          } else if (!manualEmergencyControl) {
+             // Turn OFF if intensity improves (> 40%)
+             digitalWrite(POWER_STATUS_PIN, HIGH); 
+             mqtt_client.publish(mqtt_emergency_light_status_topic, "OFF");
+          }
+      }
+  }
+
+  // --- 1-MINUTE SHUTDOWN SEQUENCE ---
+  if (emergencyModeActive) {
+    // Step 2: Activate GPIO14 after delay
+    if (!gpio14Activated && (currentMillis >= gpio14ActivationTime)) {
+      digitalWrite(LED4_PIN, LOW); delayMicroseconds(10); digitalWrite(LED4_PIN, HIGH);
+      mqtt_client.publish(mqtt_led4_status_topic, "PULSE");
+      publishCommandStatus("✓ Step 2: GPIO14 Pulse Sent");
+      gpio14Activated = true;
+    }
+    
+    // Step 3: Check 1 Minute Timer
+    if (currentMillis - emergencyStartTime >= EMERGENCY_DURATION) {
+      
+      // Requirement: "Full system off after 1 min must still function"
+      // Turning off Systems (GPIO13, GPIO14)
+      digitalWrite(LED2_PIN, HIGH);
+      digitalWrite(LED4_PIN, HIGH);
+      mqtt_client.publish(mqtt_led2_status_topic, "OFF");
+      mqtt_client.publish(mqtt_led4_status_topic, "OFF");
+      publishCommandStatus("🔴 Emergency Sequence Complete. Systems OFF.");
+      
+      // Requirement: "Except for the emergency light keep on"
+      // NOTE: We do NOT turn off POWER_STATUS_PIN here anymore.
+      // The block above (powerCutDetected) will keep handling the light.
+      
+      emergencyModeActive = false; // Stop this sequence, but powerCutDetected stays true
+    }
+  }
+}

@@ -1,0 +1,28 @@
+#include "config.h"
+
+// --- WIFI CREDENTIALS ---
+const char* ssid = "Dialog 4G 858";
+const char* password = "04588A9D";
+
+// --- MQTT SETTINGS ---
+const char* mqtt_broker = "broker.hivemq.com";
+const int mqtt_port = 1883;
+const char* mqtt_client_id = "ESP32_LED_Controller";
+
+// --- MQTT TOPICS ---
+const char* mqtt_topic = "esp32/led/control";
+const char* mqtt_status_topic = "esp32/led/status";
+const char* mqtt_led2_topic = "esp32/led2/control";
+const char* mqtt_led2_status_topic = "esp32/led2/status";
+const char* mqtt_led4_topic = "esp32/led4/control";
+const char* mqtt_led4_status_topic = "esp32/led4/status";
+const char* mqtt_sensor_voltage_topic = "esp32/sensor/voltage";
+const char* mqtt_sensor_current_topic = "esp32/sensor/current";
+const char* mqtt_sensor2_voltage_topic = "esp32/sensor2/voltage";
+const char* mqtt_sensor2_current_topic = "esp32/sensor2/current";
+const char* mqtt_powercut_topic = "esp32/powercut/status";
+const char* mqtt_command_status_topic = "esp32/command/status";
+const char* mqtt_emergency_light_topic = "esp32/emergency/control";
+const char* mqtt_emergency_light_status_topic = "esp32/emergency/status";
+const char* mqtt_powercut_history_topic = "esp32/history/powercut";
+const char* mqtt_light_intensity_topic = "esp32/light/intensity";
