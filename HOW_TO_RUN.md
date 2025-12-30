@@ -1,7 +1,4 @@
 # 🚀 HOW TO RUN - ESP32 IoT Monitoring System
-
-Complete step-by-step guide to set up and run the ESP32 Light Intensity & Power Backup System with web dashboard.
-
 ---
 
 ## 📋 Table of Contents
