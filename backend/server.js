@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import mqtt from 'mqtt';
+import cors from 'cors';
 import pkg from 'pg';
 const { Pool } = pkg;
 
@@ -303,6 +304,11 @@ const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
 
 // Middleware
 app.use(express.json());
+// Allow frontend domain(s) to call this API (set FRONTEND_URL in .env when possible)
+app.use(cors({
+    origin: [process.env.FRONTEND_URL || 'https://mqtt.thisenekanayake.me', 'http://localhost:5173'],
+    credentials: true
+}));
 
 // API routes (must come before static file serving)
 // All API routes are defined below
